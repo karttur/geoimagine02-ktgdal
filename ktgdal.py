@@ -140,7 +140,7 @@ class GDALinternal():
             
         if self.pp.process.parameters.algorithm != 'default':
             
-            kwargs['alg'] = self.pp.process.parameter.algorithm
+            kwargs['alg'] = self.pp.process.parameters.algorithm
             
         if hasattr(self.pp.process.parameters, 'alg'):
             
@@ -436,6 +436,7 @@ class GDALmosaicAdjacentTiles:
     def _GetAdjacenTiles(self,locus, datum, comp):
         '''
         '''
+        self.neighborTiles = [[False,False,False],[False,1,False],[False,False,False]]
         
         if self.pp.procsys.srcsystem == 'modis':
             pass
@@ -461,7 +462,26 @@ class GDALmosaicAdjacentTiles:
             
             elif self.pp.procsys.srcsystem[0:4] == 'ease':
                 
+                tcol = tile[0]-centertile[0]+1
+                
+                trow = centertile[1]-tile[1]+1
+                
+                print (adjacentTiles)
+                
+                print ('centretile',centertile)
+                print (tile)
+                
+                print ('tcol',tcol)
+                print ('trow',trow)
+                
+                
+                self.neighborTiles[trow][tcol] = tile
+                
                 tileLocus = supp.ConvertXYinteger(tile[0],tile[1])
+                
+                
+                
+                
                 
                 tileFPN = self.pp.srcLayerD[tileLocus['prstr']][datum][comp].FPN
                 
@@ -472,6 +492,10 @@ class GDALmosaicAdjacentTiles:
                     exit(exitstr)
                     
                 self.srcTileL.append(tileFPN)
+                
+        print (self.neighborTiles)
+            
+
                 
     def _GetMosaicCorners(self,srcFPN):
         ''' Get the corners (edges) of the mosaic to create
@@ -489,17 +513,31 @@ class GDALmosaicAdjacentTiles:
         
         overlap = self.pp.process.parameters.overlap
         
-        minx -= overlap*cellsize
+        print (self.neighborTiles)
         
-        miny -= overlap*cellsize
+        if any([item[0] for item in self.neighborTiles]):
         
-        maxx += overlap*cellsize
+            minx -= overlap*cellsize
+            
+            self.xsize += overlap
+            
+        if any (self.neighborTiles[2]):
         
-        maxy += overlap*cellsize
+            miny -= overlap*cellsize
+            
+            self.ysize += overlap
+            
+        if any([item[2] for item in self.neighborTiles]):
         
-        self.xsize += 2*overlap
+            maxx += overlap*cellsize
+            
+            self.xsize += overlap
+            
+        if any (self.neighborTiles[0]):
         
-        self.ysize += 2*overlap
+            maxy += overlap*cellsize
+            
+            self.ysize += overlap
         
         self.extent = (minx, miny, maxx, maxy)
         
@@ -532,14 +570,14 @@ class GDALmosaicAdjacentTiles:
                     
                     dstLayer = self.pp.dstLayerD[locus][datum][comp]
                     
-                    if dstLayer._Exists() and not self.pp.overwrite:
+                    if dstLayer._Exists() and not self.pp.process.overwrite:
                         
                         continue
             
                     self._GetAdjacenTiles(locus, datum ,comp)
                     
                     self._GetMosaicCorners(srcLayer.FPN)
-                    
+                                        
                     self._TranslateMosaic(dstLayer)
                     
 
@@ -595,7 +633,13 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
             
             self._SetConstantsAndDicts()
             
-            self._TranslateRegion()
+            self._TranslateTilesRegions()
+            
+        elif self.pp.process.processid.lower() == 'translatetiles':
+            
+            self._SetConstantsAndDicts()
+            
+            self._TranslateTilesRegions()
             
         else:
             
@@ -667,7 +711,65 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
                                 self._ReProjectRaster(locus, datum, comp, self.pp.srcLayerD[srcLocus][datum][comp].FPN, dstLayer)
  
  
-    def _TranslateRegion(self):
+    def _TranslateTilesRegions(self):
+        '''
+        '''
+        self.scriptFD = {}; self.scriptFPND = {}
+        
+        if self.pp.process.parameters.asscript:
+            
+            today = mj_dt.Today()
+            
+            for comp in self.pp.dstCompD:
+                
+                scriptFP = os.path.join('/Volumes',self.pp.dstPath.volume, self.pp.procsys.dstsystem, self.pp.dstCompD[comp].source,'region','reprojectscript')
+                
+                if not os.path.exists(scriptFP):
+                    
+                    os.makedirs(scriptFP)
+                    
+                scriptFN = 'translate_%(comp)s-%(today)s.sh' %{'comp':comp, 'today':today}
+                
+                scriptFPN = os.path.join(scriptFP,scriptFN)
+                
+                self.scriptFPND[comp] = scriptFPN
+                
+                self.scriptFD[comp] = open(scriptFPN,'w')
+                
+                writeln = '# Script created by Kartturs GeoImagine Framework for translating %s, created %s\n' %(comp, today)
+        
+                self.scriptFD[comp].write(writeln)
+                      
+        for locus in self.pp.srcLayerD:
+                        
+            for datum in self.pp.srcLayerD[locus]:
+                          
+                for comp in self.pp.srcLayerD[locus][datum]:
+                                        
+                    if not os.path.exists(self.pp.srcLayerD[locus][datum][comp].FPN):
+                    
+                        exitstr = 'EXITING - tile missing\n    %s' %(self.pp.srcLayerD[locus][datum][comp].FPN)
+            
+                        exit(exitstr)
+                        
+                    # Loop over all destination tiles with the same comp and datum
+                    
+                    for locus in self.pp.dstLayerD:
+                        
+                        dstLayer = self.pp.dstLayerD[locus][datum][comp]
+                        
+                        if not dstLayer._Exists(): 
+                        
+                            if self.verbose > 1:
+                            
+                                infostr = '            translate tile: %s' %( dstLayer.FPN )
+                                
+                                print (infostr)
+
+                                self._GdalTranslate(dstLayer.FPN, self.pp.srcLayerD[locus][datum][comp].FPN)
+
+ 
+    def _TranslateRegionOld(self):
         '''
         '''
         self.scriptFD = {}; self.scriptFPND = {}
@@ -696,15 +798,15 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
         
                 self.scriptFD[comp].write(writeln)
                       
-        for srcLocus in self.pp.srcLayerD:
+        for locus in self.pp.srcLayerD:
                         
-            for datum in self.pp.srcLayerD[srcLocus]:
+            for datum in self.pp.srcLayerD[locus]:
                           
-                for comp in self.pp.srcLayerD[srcLocus][datum]:
+                for comp in self.pp.srcLayerD[locus][datum]:
                                         
-                    if not os.path.exists(self.pp.srcLayerD[srcLocus][datum][comp].FPN):
+                    if not os.path.exists(self.pp.srcLayerD[locus][datum][comp].FPN):
                     
-                        exitstr = 'EXITING - region layer for tiling missing\n    %s' %(self.pp.srcLayerD[srcLocus][datum][comp].FPN)
+                        exitstr = 'EXITING - region layer for tiling missing\n    %s' %(self.pp.srcLayerD[locus][datum][comp].FPN)
             
                         exit(exitstr)
                         
@@ -724,7 +826,7 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
                                 
                                 
                                 
-                                self._GdalTranslate(dstLayer.FPN, self.pp.srcLayerD[srcLocus][datum][comp].FPN)
+                                self._GdalTranslate(dstLayer.FPN, self.pp.srcLayerD[locus][datum][comp].FPN)
 
 
     def _TileRegion(self):
@@ -976,6 +1078,7 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
                 if not self.pp.process.acceptmissing:
                         
                     missingL = []
+                    
                     # Check that all input tiles are included
                     for tile in self.pp.srcLayerDateNonExistD:
                         
@@ -999,7 +1102,7 @@ class ProcessGDAL(GDALinternal,GDALmosaicAdjacentTiles):
                     if datum in self.pp.srcLayerDateExistD[tile][comp]:
                         
                         tileL.append(self.pp.srcLayerD[tile][datum][comp].FPN)
-                        
+                                                
                 if len(tileL) == 0:  
                     
                     exitstr = 'EXITING - no tiles for creating mosaic'
